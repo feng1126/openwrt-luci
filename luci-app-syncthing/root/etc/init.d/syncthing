@@ -1,0 +1,66 @@
+#!/bin/sh /etc/rc.common
+#
+# Copyright (C) 2015 OpenWrt-dist
+# Copyright (C) 2016 fw867 <ffkykzs@gmail.com>
+#
+# This is free software, licensed under the GNU General Public License v3.
+# See /LICENSE for more information.
+#
+
+START=99
+STOP=13
+SERVICE_USE_PID=1
+SERVICE_WRITE_PID=1
+SERVICE_DAEMONIZE=1
+
+HOME=/root
+export HOME
+CONFIG=syncthing
+CONPATH=/mnt/sda1/syncthing/config
+LOGFILE=/var/log/$CONFIG.log
+
+
+
+download_binary(){
+         s_arch="arm"
+         mkdir $path
+	wget --no-check-certificate --timeout=10 --tries=5 https://github.com/syncthing/syncthing/releases/download/v1.3.1/syncthing-linux-$s_arch-v1.3.1.tar.gz -O /tmp/syncthing-linux-$s_arch-v1.3.1.tar.gz
+	[ -f "/tmp/syncthing-linux-$s_arch-v1.3.1.tar.gz" ] && tar -xf /tmp/syncthing-linux-$s_arch-v1.3.1.tar.gz -C /tmp && \
+		cp -r /tmp/syncthing-linux-$s_arch-v0.14.39/ $path/syncthing
+	
+}
+
+start() {
+	config_load "syncthing"
+	config_get enable config enable 0
+	path=$(uci get syncthing.config.path)
+        [ "$enable" -eq 0 ] &&	exit 0
+	[ ! -f "$path/syncthing/syncthing" ] && {
+			download_binary
+			[ ! -f "$path/syncthing/syncthing" ] && logger -t syncthing 'Download syncthing failed, please retry.' && exit 0
+	
+	}
+	
+        iptables -t filter -I INPUT -p tcp -m multiport --dports 22000,22067,8067,8384 -j ACCEPT
+	iptables -t filter -I INPUT -p udp -m multiport --dports 21025,21026,21027 -j ACCEPT
+
+	service_start $path/syncthing/syncthing -home  $path/syncthing/config -logfile $LOGFILE >/dev/null 2>&1 &
+	logger -t syncthing 'Start syncthing service'
+        wirte=$(cat /etc/crontabs/root | grep "*/10 * * * *" )
+
+        if [ -z "$wirte"]
+        then
+
+        echo "*/10 * * * * sh /app/syncthing/syncthing.sh" >> /etc/crontabs/root 
+  
+        else
+           echo -e "Not OK"  
+  
+      fi   
+}
+
+stop() {
+	service_stop $path/syncthing/syncthing >/dev/null 2>&1 &
+	logger -t syncthing 'Stop syncthing service'
+}
+

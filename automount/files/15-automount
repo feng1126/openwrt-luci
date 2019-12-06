@@ -1,0 +1,110 @@
+#!/bin/sh
+. /lib/functions.sh
+
+get_mountpath() {
+	my_fsparam=$1
+	type=$2
+	index=$(uci show fstab | grep -w "$type='$my_fsparam'" | awk -F'.' '{print $2}')
+	if [ "$(uci -q get fstab.$index.enabled)" == "1" ]; then
+		mountpath=$(uci -q get fstab.$index.target)
+	else
+		mountpath=/mnt/$device
+	fi
+}
+
+specified_mountpath() {
+
+	if [ -n "$my_fslabel" ] && [ "$(uci show fstab | grep -c "label='$my_fslabel'")" == "1" ]; then
+		get_mountpath "$my_fslabel" label
+	elif [ -n "$my_fsuuid" ] && [ "$(uci show fstab | grep -c "uuid='$my_fsuuid'")" == "1" ]; then
+		get_mountpath "$my_fsuuid" uuid
+	else
+		mountpath=/mnt/$device
+	fi
+
+}
+
+auto_mount(){
+	[ ! -d "$mountpath" ] && mkdir -p $mountpath
+	# [ -n "`ls $mountpath`" ] && {
+		# [ ! -d "/tmp/mnt/share" ] && mkdir -p /tmp/mnt/share
+		# mountpath=/tmp/mnt/share
+	# }
+	chmod -R 777 $mountpath
+	if [ "$my_fstype" == "ntfs" ]; then
+		mount -t ntfs-3g -o rw,nls=utf8,umask=000 /dev/$device $mountpath
+	else
+		case "$my_fstype" in
+			ext*)
+				mount -t $my_fstype -o rw,noatime /dev/$device $mountpath
+			;;
+			exfat)
+				mount -t $my_fstype -o rw,noatime,iocharset=cp936,iocharset=utf8,umask=000 /dev/$device $mountpath
+			;;
+			vfat)
+				mount -t $my_fstype -o rw,codepage=936,utf8=1,umask=000 /dev/$device $mountpath
+			;;
+			msdos)
+				mount -t $my_fstype -o rw,codepage=936,iocharset=utf8,umask=000 /dev/$device $mountpath
+			;;
+			cifs)
+				mount -t $my_fstype -o nounix,noserverino,iocharset=utf8,umask=000 /dev/$device $mountpath
+			;;
+			*)
+				mount /dev/$device $mountpath
+				[ $? -eq 0 ] && logger -t Auto-Mount "New block.File system:${my_fstype}, LABEL:${my_fslabel}, UUID:${my_fsuuid} is not supported, please mount it manually."
+			;;
+		esac
+	fi
+}
+auto_umount(){
+	logger -t Auto-Mount "The device $device has been mounted to $mountpoint, now remove it first!"
+	umount $mountpoint && sleep 2s
+	mountpoint=$(cat /proc/self/mounts | grep -w "/dev/$device" | awk '{print $2}')
+}
+
+countdev=$(ls /dev/sd* |grep -c $DEVNAME)
+alldev=$(ls /dev/sd* | wc -l)
+if [ "$ACTION" == "add" ]; then
+	[ "$countdev" -gt 0 ] && ([ "$alldev" == "1" ] || ([ "$alldev" -gt 1 ] && [ "$countdev" -lt "$alldev" ])) || exit 1
+fi
+
+device=$DEVNAME
+case "$ACTION" in
+	add)
+		logger -t Auto-Mount "Found new device $device, waiting to be mounted"
+		mountpoint=$(cat /proc/self/mounts | grep -w "/dev/$device" |awk '{print $2}')
+		while [ -n "$mountpoint" ]; do
+			auto_umount
+		done
+		my_fsinfo=$(block info | grep -w "/dev/$device")
+		my_fstype=$(echo "$my_fsinfo" | awk -F' TYPE="' '{print $2}' | awk -F'"' '{print $1}')
+		my_fsuuid=$(echo "$my_fsinfo" | awk -F'UUID="' '{print $2}' | awk -F'"' '{print $1}')
+		my_fslabel=$(echo "$my_fsinfo" | awk -F'LABEL="' '{print $2}'| awk -F'"' '{print $1}')
+		[ -z "$my_fstype" ] && my_fstype=$(blkid /dev/$device | awk -F' TYPE="' '{print $2}' | awk -F'"' '{print $1}')
+		[ -z "$my_fsuuid" ] && my_fsuuid=$(blkid /dev/$device | awk -F'UUID="' '{print $2}' | awk -F'"' '{print $1}')
+		[ -z "$my_fslabel" ] && my_fslabel=$(blkid /dev/$device | awk -F'LABEL="' '{print $2}' | awk -F'"' '{print $1}')
+		[ -z "$mountpoint" ] && {
+			[ -n "$my_fstype" ] && {
+				logger -t Auto-Mount "The new block.File system INFO: ${my_fstype}, LABEL:${my_fslabel}, UUID:${my_fsuuid}"
+				specified_mountpath
+				auto_mount
+			}
+		}
+		sleep 2s
+		judge_ifmount=$(cat /proc/self/mounts | grep -w "/dev/$device" |awk '{print $2}')
+		if [ -z "$judge_ifmount" ]; then
+			logger -t Auto-Mount "New block.File system:${my_fstype}, LABEL:${my_fslabel}, UUID:${my_fsuuid} mounted failed."
+		else
+			logger -t Auto-Mount "New ${my_fstype} disk, LABEL:${my_fslabel}, UUID:${my_fsuuid} has been mounted to $mountpath ."
+		fi
+	;;
+	remove)
+		mountpoint=$(cat /proc/self/mounts | grep -w "/dev/$device" | awk '{print $2}')
+		[ -n "$mountpoint" ] && {
+			logger -t Auto-Mount "umount device $device now..."
+			umount $mountpoint
+		}
+	;;
+esac
+

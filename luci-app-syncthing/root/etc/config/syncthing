@@ -1,0 +1,5 @@
+
+config syncthing 'config'
+	option path '/mnt/sda1'
+	option enable '0'
+
